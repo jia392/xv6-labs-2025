@@ -1,0 +1,12 @@
+1.Looking at the backtrace output, which function called syscall?
+usertrap
+2.What is the value of p->trapframe->a7 and what does that value represent? (Hint: look at user/init.c, the first user program xv6 starts, and its compiled assembly user/init.asm.)
+0xa，代表CPU发生系统调用（Syscall）时传入的系统调用号
+3.What was the previous mode that the CPU was in?
+User Mode用户态
+4.Write down the assembly instruction the kernel is panicing at. Which register corresponds to the variable num?
+崩溃处的汇编指令是lw a3,0(zero)，对应变量num的寄存器是a3
+5.Why does the kernel crash? Hint: look at figure 3-3 in the text; is address 0 mapped in the kernel address space? Is that confirmed by the value in scause above? (See description of scause in RISC-V privileged instructions)
+因为代码试图去读取内存地址0（空指针），而内核的虚拟内存空间里根本没有映射地址0，所以触发了页错误
+6.What is the name of the process that was running when the kernel paniced? What is its process id (pid)?
+进程名字：init；进程ID：1
