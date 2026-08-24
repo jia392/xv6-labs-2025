@@ -65,6 +65,9 @@
 #ifdef LAB_PGTBL
 #define USYSCALL (TRAPFRAME - PGSIZE)
 
+#define NSUPER 32
+#define SUPERSTART (PHYSTOP - NSUPER * SUPERPGSIZE)
+
 struct usyscall {
   int pid;  // Process ID
 };

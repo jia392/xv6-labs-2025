@@ -23,11 +23,43 @@ struct {
   struct run *freelist;
 } kmem;
 
+struct superrun {
+  struct superrun *next;
+};
+
+struct {
+  struct spinlock lock;
+  struct superrun *freelist;
+} superkmem;
+
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+  initlock(&superkmem.lock, "superkmem");
+
+  uint64 super_start =
+      PHYSTOP - NSUPER * SUPERPGSIZE;
+
+  // 普通页
+  freerange(end, (void*)super_start);
+
+  // superpage
+  for(uint64 pa = super_start;
+      pa < PHYSTOP;
+      pa += SUPERPGSIZE){
+
+    superfree((void*)pa);
+  }
+  int count=0;
+  struct superrun *r=superkmem.freelist;
+
+  while(r){
+    count++;
+    r=r->next;
+  }
+
+  printf("super pages = %d\n", count);
 }
 
 void
@@ -79,4 +111,43 @@ kalloc(void)
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+void *
+superalloc(void)
+{
+  struct superrun *r;
+
+  acquire(&superkmem.lock);
+
+  r = superkmem.freelist;
+
+  if(r)
+    superkmem.freelist = r->next;
+
+  release(&superkmem.lock);
+
+  if(r){
+    memset((char*)r, 5, SUPERPGSIZE);
+  }
+
+  return (void*)r;
+}
+
+void
+superfree(void *pa)
+{
+  if(((uint64)pa % SUPERPGSIZE) != 0 ||
+     (uint64)pa < PHYSTOP - NSUPER*SUPERPGSIZE ||
+     (uint64)pa + SUPERPGSIZE > PHYSTOP)
+    panic("superfree");
+
+  memset(pa,1,SUPERPGSIZE);
+
+  struct superrun *r=(struct superrun*)pa;
+
+  acquire(&superkmem.lock);
+  r->next=superkmem.freelist;
+  superkmem.freelist=r;
+  release(&superkmem.lock);
 }
