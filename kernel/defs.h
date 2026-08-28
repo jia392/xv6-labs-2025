@@ -59,6 +59,8 @@ void            ireclaim(int);
 void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
+void            kref_inc(uint64);
+int             kref_get(uint64);
 
 // log.c
 void            initlog(int, struct superblock*);
@@ -183,3 +185,6 @@ void            virtio_disk_intr(void);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+
+void            exit(int);
+void            usertrapret(void);
