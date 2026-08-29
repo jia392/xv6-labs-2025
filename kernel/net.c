@@ -19,10 +19,36 @@ static uint8 host_mac[ETHADDR_LEN] = { 0x52, 0x55, 0x0a, 0x00, 0x02, 0x02 };
 
 static struct spinlock netlock;
 
+#define UDP_QUEUE_SIZE 16
+
+struct udp_packet {
+  char *buf;
+  int len;
+  uint32 src;
+  uint16 sport;
+  struct udp_packet *next;
+};
+
+struct udp_queue {
+  int port;
+  int bound;
+  int count;
+  struct udp_packet *head;
+  struct udp_packet *tail;
+};
+
+static struct udp_queue udp_queues[UDP_QUEUE_SIZE];
+
 void
 netinit(void)
 {
   initlock(&netlock, "netlock");
+  for(int i = 0; i < UDP_QUEUE_SIZE; i++){
+    udp_queues[i].bound = 0;
+    udp_queues[i].count = 0;
+    udp_queues[i].head = 0;
+    udp_queues[i].tail = 0;
+  }
 }
 
 
@@ -37,6 +63,33 @@ sys_bind(void)
   //
   // Your code here.
   //
+  int port;
+
+  argint(0, &port);
+
+  acquire(&netlock);
+
+  for(int i = 0; i < UDP_QUEUE_SIZE; i++){
+    if(udp_queues[i].bound && udp_queues[i].port == port){
+      release(&netlock);
+      return 0;
+    }
+  }
+
+  for(int i = 0; i < UDP_QUEUE_SIZE; i++){
+    if(!udp_queues[i].bound){
+      udp_queues[i].bound = 1;
+      udp_queues[i].port = port;
+      udp_queues[i].count = 0;
+      udp_queues[i].head = 0;
+      udp_queues[i].tail = 0;
+
+      release(&netlock);
+      return 0;
+    }
+  }
+
+  release(&netlock);
 
   return -1;
 }
@@ -77,7 +130,83 @@ sys_recv(void)
   //
   // Your code here.
   //
-  return -1;
+  int dport;
+  uint64 srcaddr;
+  uint64 sportaddr;
+  uint64 bufaddr;
+  int maxlen;
+
+  argint(0, &dport);
+  argaddr(1, &srcaddr);
+  argaddr(2, &sportaddr);
+  argaddr(3, &bufaddr);
+  argint(4, &maxlen);
+
+  acquire(&netlock);
+
+  struct udp_queue *q = 0;
+
+  for(int i = 0; i < UDP_QUEUE_SIZE; i++){
+    if(udp_queues[i].bound && udp_queues[i].port == dport){
+      q = &udp_queues[i];
+      break;
+    }
+  }
+
+  if(q == 0){
+    release(&netlock);
+    return -1;
+  }
+
+  while(q->head == 0){
+    sleep(q, &netlock);
+  }
+
+  struct udp_packet *p = q->head;
+
+  q->head = p->next;
+  if(q->head == 0)
+    q->tail = 0;
+
+  q->count--;
+
+  release(&netlock);
+
+  int n = p->len;
+  if(n > maxlen)
+    n = maxlen;
+
+  struct proc *proc = myproc();
+
+  char *payload = p->buf +
+                  sizeof(struct eth) +
+                  sizeof(struct ip) +
+                  sizeof(struct udp);
+
+  if(copyout(proc->pagetable, bufaddr, payload, n) < 0){
+    kfree(p->buf);
+    kfree((char *)p);
+    return -1;
+  }
+
+  if(copyout(proc->pagetable, srcaddr,
+             (char *)&p->src, sizeof(p->src)) < 0){
+    kfree(p->buf);
+    kfree((char *)p);
+    return -1;
+  }
+
+  if(copyout(proc->pagetable, sportaddr,
+             (char *)&p->sport, sizeof(p->sport)) < 0){
+    kfree(p->buf);
+    kfree((char *)p);
+    return -1;
+  }
+
+  kfree(p->buf);
+  kfree((char *)p);
+
+  return n;
 }
 
 // This code is lifted from FreeBSD's ping.c, and is copyright by the Regents
@@ -174,7 +303,10 @@ sys_send(void)
     return -1;
   }
 
-  e1000_transmit(buf, total);
+  if(e1000_transmit(buf, total) < 0){
+    kfree(buf);
+    return -1;
+  } 
 
   return 0;
 }
@@ -188,10 +320,94 @@ ip_rx(char *buf, int len)
     printf("ip_rx: received an IP packet\n");
   seen_ip = 1;
 
-  //
-  // Your code here.
-  //
-  
+  if(len < sizeof(struct eth) + sizeof(struct ip)){
+    kfree(buf);
+    return;
+  }
+
+  struct ip *ip = (struct ip *)(buf + sizeof(struct eth));
+
+  if(ip->ip_p != IPPROTO_UDP){
+    kfree(buf);
+    return;
+  }
+
+  if(len < sizeof(struct eth) +
+           sizeof(struct ip) +
+           sizeof(struct udp)){
+    kfree(buf);
+    return;
+  }
+
+  struct udp *udp = (struct udp *)(ip + 1);
+
+  int dport = ntohs(udp->dport);
+  int sport = ntohs(udp->sport);
+  int ulen = ntohs(udp->ulen);
+
+  if(ulen < sizeof(struct udp)){
+    kfree(buf);
+    return;
+  }
+
+  if(ulen > len - sizeof(struct eth) - sizeof(struct ip)){
+    kfree(buf);
+    return;
+  }
+
+  int payload_len = ulen - sizeof(struct udp);
+
+  acquire(&netlock);
+
+  struct udp_queue *q = 0;
+
+  for(int i = 0; i < UDP_QUEUE_SIZE; i++){
+    if(udp_queues[i].bound &&
+       udp_queues[i].port == dport){
+      q = &udp_queues[i];
+      break;
+    }
+  }
+
+  if(q == 0){
+    release(&netlock);
+    kfree(buf);
+    return;
+  }
+
+  if(q->count >= 16){
+    release(&netlock);
+    kfree(buf);
+    return;
+  }
+
+  struct udp_packet *p = kalloc();
+
+  if(p == 0){
+    release(&netlock);
+    kfree(buf);
+    return;
+  }
+
+  p->buf = buf;
+  p->len = payload_len;
+  p->src = ntohl(ip->ip_src);
+  p->sport = sport;
+  p->next = 0;
+
+  if(q->tail == 0){
+    q->head = p;
+    q->tail = p;
+  } else {
+    q->tail->next = p;
+    q->tail = p;
+  }
+
+  q->count++;
+
+  wakeup(q);
+
+  release(&netlock);
 }
 
 //
