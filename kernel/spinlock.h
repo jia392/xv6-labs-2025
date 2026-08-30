@@ -15,6 +15,9 @@ struct spinlock {
 // Reader-writer lock.
 struct rwspinlock {
   // Replace this with your implementation.
-  struct spinlock l;
+  uint locked;       
+  uint readers;      
+  uint writers;     
+  struct spinlock lock;
 };
 #endif
