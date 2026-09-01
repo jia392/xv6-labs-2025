@@ -17,6 +17,7 @@ struct spinlock pid_lock;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
+int mmap_writeback(struct proc *, struct vma *, uint64, uint64);
 
 extern char trampoline[]; // trampoline.S
 
@@ -273,6 +274,16 @@ kfork(void)
   }
   np->sz = p->sz;
 
+  // Copy mmap VMA information.
+  for(i = 0; i < NVMA; i++){
+    if(p->vmas[i].used){
+      np->vmas[i] = p->vmas[i];
+      np->vmas[i].file = filedup(p->vmas[i].file);
+    } else {
+      memset(&np->vmas[i], 0, sizeof(np->vmas[i]));
+    }
+  }
+
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 
@@ -283,6 +294,7 @@ kfork(void)
   for(i = 0; i < NOFILE; i++)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
+
   np->cwd = idup(p->cwd);
 
   safestrcpy(np->name, p->name, sizeof(p->name));
@@ -328,6 +340,22 @@ kexit(int status)
   if(p == initproc)
     panic("init exiting");
 
+  // Unmap all mmap regions before closing open files.
+  for(int i = 0; i < NVMA; i++){
+    if(p->vmas[i].used){
+      uint64 addr = p->vmas[i].addr;
+      uint64 len = p->vmas[i].len;
+
+      if(mmap_writeback(p, &p->vmas[i], addr, len) < 0)
+        setkilled(p);
+
+      uvmunmap(p->pagetable, addr, len / PGSIZE, 1);
+
+      fileclose(p->vmas[i].file);
+      memset(&p->vmas[i], 0, sizeof(p->vmas[i]));
+    }
+  }
+
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
     if(p->ofile[fd]){
@@ -344,10 +372,8 @@ kexit(int status)
 
   acquire(&wait_lock);
 
-  // Give any children to init.
   reparent(p);
 
-  // Parent might be sleeping in wait().
   wakeup(p->parent);
   
   acquire(&p->lock);
@@ -357,7 +383,6 @@ kexit(int status)
 
   release(&wait_lock);
 
-  // Jump into the scheduler, never to return.
   sched();
   panic("zombie exit");
 }

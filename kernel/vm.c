@@ -7,6 +7,9 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "fs.h"
+#include "fcntl.h"
+#include "sleeplock.h"
+#include "file.h"
 
 /*
  * the kernel's page table.
@@ -452,20 +455,90 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 uint64
 vmfault(pagetable_t pagetable, uint64 va, int read)
 {
-  uint64 mem;
   struct proc *p = myproc();
+  struct vma *vma = 0;
+  uint64 mem;
+  uint64 fileoff;
+  uint perm;
 
-  if (va >= p->sz)
-    return 0;
   va = PGROUNDDOWN(va);
-  if(ismapped(pagetable, va)) {
-    return 0;
+
+  for(int i = 0; i < NVMA; i++){
+    if(p->vmas[i].used &&
+       va >= p->vmas[i].addr &&
+       va < p->vmas[i].addr + p->vmas[i].len){
+      vma = &p->vmas[i];
+      break;
+    }
   }
-  mem = (uint64) kalloc();
+
+  if(vma != 0){
+
+    if(ismapped(pagetable, va))
+      return 0;
+
+    if(read && !(vma->prot & PROT_READ))
+      return 0;
+
+    //分配物理页
+    mem = (uint64)kalloc();
+    if(mem == 0)
+      return 0;
+
+    memset((void *)mem, 0, PGSIZE);
+
+    //计算文件偏移
+    fileoff = vma->offset + (va - vma->addr);
+
+    //从文件读取数据
+    struct inode *ip = vma->file->ip;
+
+    ilock(ip);
+
+    if(readi(ip, 0, mem, fileoff, PGSIZE) < 0){
+      iunlock(ip);
+      kfree((void *)mem);
+      return 0;
+    }
+
+    iunlock(ip);
+
+    //设置页面权限
+    perm = PTE_U;
+
+    if(vma->prot & PROT_READ)
+      perm |= PTE_R;
+
+    if(vma->prot & PROT_WRITE)
+      perm |= PTE_W;
+
+    if(vma->prot & PROT_EXEC)
+      perm |= PTE_X;
+
+    if(mappages(pagetable, va, PGSIZE, mem, perm) != 0){
+      kfree((void *)mem);
+      return 0;
+    }
+
+    return mem;
+  }
+
+  if(va >= p->sz)
+    return 0;
+
+  //如果已经有映射，就不需要再次分配
+  if(ismapped(pagetable, va))
+    return 0;
+
+  mem = (uint64)kalloc();
   if(mem == 0)
     return 0;
-  memset((void *) mem, 0, PGSIZE);
-  if (mappages(p->pagetable, va, PGSIZE, mem, PTE_W|PTE_U|PTE_R) != 0) {
+
+  memset((void *)mem, 0, PGSIZE);
+
+  perm = PTE_R | PTE_W | PTE_U;
+
+  if(mappages(pagetable, va, PGSIZE, mem, perm) != 0){
     kfree((void *)mem);
     return 0;
   }
