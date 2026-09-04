@@ -24,3 +24,25 @@
 
 ---
 
+##  环境依赖与编译
+
+- **系统环境**: Ubuntu 24.04 (WSL2 / Linux)
+- **工具链**: `gcc-riscv64-linux-gnu`, `qemu-system-riscv64`, `gdb-riscv64-linux-gnu`
+
+### 运行与测试方法
+
+1. **切换到目标实验分支**（以切换 Lab 7 为例）：
+   ```bash
+   git checkout lock
+
+2. **编译并启动 xv6 模拟器**
+   ```bash
+   make qemu
+
+4. **在 xv6 内部运行测试，例如：**
+   ```bash
+   kalloctest
+   
+6. **运行评分脚本进行本地测试**
+    ```bash
+   make grade
