@@ -1,0 +1,10 @@
+1.Which registers contain arguments to functions? For example, which register holds 13 in main's call to printf?
+寄存器：参数通过a0到a7寄存器传递。数值13所在寄存器：在a2寄存器中。
+2.Where is the call to function f in the assembly code for main? Where is the call to g?
+在main的汇编代码中找不到对f和g的函数调用（jal / call）。
+3. At what address is the function printf located?
+0x6f6
+4.What value is in the register ra just after the jalr to printf in main?
+0x34
+5.输出结果：HE110 World。57616作为一个整型数值传入，格式化%x输出的是其数值本身，不受内存字节序影响。
+6.y=后面打印的内容：会打印出一个随机值（未定义的值/垃圾值），来自于当时a2寄存器里残留的数据。原因：格式化字符串中有两个 %d，期望获取两个参数（分别对应 a1 和 a2 寄存器）。但代码只传入了一个参数 3（存入 a1），printf 尝试去读取 a2 寄存器时，读取到了上一次调用留下的残余数据。
